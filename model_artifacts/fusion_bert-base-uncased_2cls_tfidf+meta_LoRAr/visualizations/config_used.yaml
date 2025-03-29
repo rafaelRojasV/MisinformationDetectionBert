@@ -1,0 +1,52 @@
+evaluation:
+  authenticity_mapping: null
+  n_samples_for_pca: 1000
+  thresholds_to_try:
+  - 0.3
+  - 0.5
+  - 0.7
+metadata:
+  scale: true
+  use: true
+model:
+  lora_alpha: 16
+  lora_bias: none
+  lora_dropout: 0.05
+  lora_rank: 8
+  lora_target_modules:
+  - query
+  - key
+  - value
+  - dense
+  name: bert-base-uncased
+  num_labels: 2
+system:
+  logging:
+    log_level: INFO
+  run_id: 20250322_203323_43acb1
+  run_name: bert_uncased_experiment
+tfidf:
+  max_features: 2000
+  min_df: 3
+  ngram_range:
+  - 1
+  - 3
+  scale: true
+  sublinear_tf: true
+  use: true
+training:
+  batch_size: 32
+  device: cuda
+  early_stopping_patience: 2
+  gradient_accumulation_steps: 1
+  gradient_checkpointing: false
+  inference_batch_size: 32
+  label_smoothing_factor: 0.0
+  learning_rate: 3e-5
+  max_length: 256
+  num_train_epochs: 4
+  output_dir: peft_fusion_output
+  return_logits: false
+  sample_size: null
+  use_8bit: false
+  use_fp16: true

@@ -1,0 +1,16 @@
+2025-03-22 20:34:41,161 - INFO -  Centralized logging is set up successfully.
+2025-03-22 20:34:41,162 - INFO -  Training script started.
+2025-03-22 20:34:41,165 - INFO - Configuration saved to model_artifacts\run_20250322_203323_43acb1\visualizations\config_used.yaml
+2025-03-22 20:34:41,165 - INFO - Loading dataset from: data\processed\pure_political_dataset_truncated.csv
+2025-03-22 20:34:42,447 - INFO - Shape of loaded dataset = (74786, 10)
+2025-03-22 20:34:42,448 - INFO - Columns: ['combined_text', 'label', 'source', 'liar_party', 'liar_justification', 'subject', 'date', 'Motive', 'Misinfo_Type', 'domain_prob']
+2025-03-22 20:34:42,508 - INFO - Train set size=59828, Val set size=14958
+2025-03-22 20:34:42,509 - INFO - Fitting PEFTBertFusionTransformer on train set...
+2025-03-22 20:36:00,592 - INFO - [fit] Building BertWithNumericFusion => tfidf_dim=2000, meta_dim=1, class_weights=None
+2025-03-22 20:38:52,960 - INFO - [fit] Using device=cuda
+2025-03-22 20:38:52,964 - INFO - [fit] Starting Trainer.train() ...
+2025-03-22 20:58:03,346 - INFO - [fit] Trainer.train() complete.
+2025-03-22 20:58:26,118 - INFO -  Running evaluation on val set...
+2025-03-22 21:00:25,562 - INFO - Evaluation results: {'model': 'my_peft_model', 'accuracy': 0.9064045995453938, 'f1': 0.9063864978978402, 'balanced_accuracy': np.float64(0.9069162280235104), 'authenticity': None, 'best_threshold': 0.5}
+2025-03-22 21:00:26,276 - INFO - Model saved to: model_artifacts\run_20250322_203323_43acb1\peft_fusion_model.pkl
+2025-03-22 21:00:26,277 - INFO -  Training script finished successfully.

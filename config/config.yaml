@@ -1,0 +1,73 @@
+system:
+  run_name: "fusion_bert-large-cased_2cls_tfidf_meta_lora"
+  logging:
+    log_level: "INFO"
+
+model:
+  # Switch to BERT Large Cased
+  name: "bert-large-cased"
+  # 2-class classification
+  num_labels: 2
+
+  # LoRA hyperparams
+  lora_rank: 8
+  lora_alpha: 16
+  lora_dropout: 0.05
+  # If you’re not certain which bias type to use, "none" or "lora_only" is fine
+  lora_bias: "none"
+  # Target modules typical for BERT-based models
+  lora_target_modules: ["query", "key", "value", "dense"]
+
+tfidf:
+  # Use TF-IDF
+  use: true
+  max_features: 2000
+  ngram_range: [1, 3]
+  sublinear_tf: true
+  min_df: 3
+  scale: true  # standardize the TF-IDF vectors
+
+metadata:
+  # Use metadata
+  use: true
+  # Scale numeric metadata features
+  scale: true
+
+training:
+  # If you want to debug or do partial training, set sample_size
+  sample_size: null
+
+  # Extra memory might be needed for BERT Large. If you have a strong GPU, we can skip 8-bit
+  use_8bit: false
+  gradient_checkpointing: false
+
+  # Use FP16 for speed on GPU
+  use_fp16: true
+  device: "cuda"
+
+  # Typical LR for large BERT with LoRA
+  learning_rate: 3e-5
+
+  # Larger batch if GPU has enough memory, else reduce to 16
+  batch_size: 16
+  gradient_accumulation_steps: 1
+
+  # ~3–4 epochs is common for BERT Large
+  num_train_epochs: 4
+
+  # BERT Large can handle up to 512 tokens, but 256 is often enough
+  max_length: 256
+
+  # Additional standard training settings
+  label_smoothing_factor: 0.0
+  early_stopping_patience: 2
+  output_dir: "peft_fusion_output"
+  return_logits: false
+  inference_batch_size: 32
+
+evaluation:
+  # Evaluate thresholds
+  thresholds_to_try: [0.3, 0.5, 0.7]
+  authenticity_mapping: null
+  n_samples_for_pca: 1000
+
