@@ -23,7 +23,7 @@ def main():
     run_dir = os.path.join("model_artifacts", f"run_{run_id}")
 
     # 1) Load config & set up logging
-    config = load_config("config/config.yaml")
+    config = load_config("config/config_bert_base.yaml")
     log_filename = f"evaluation_{run_id}.log"
     log_path = os.path.join(run_dir, "logs", log_filename)
     log_level = config['system'].get('logging', {}).get('log_level', 'INFO')

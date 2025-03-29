@@ -18,6 +18,14 @@ import logging
 import importlib
 import uuid
 from datetime import datetime
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
+# -------------------------------
+# Import your rotating logger setup
+# -------------------------------
+# In environment_setup.py:
+from src.logger_setup import setup_logging
 
 def run_command(cmd_list):
     """Run a command list via subprocess.check_call, logs on fail."""
@@ -37,8 +45,15 @@ os.makedirs(os.path.join(run_dir, "logs"), exist_ok=True)
 os.makedirs(os.path.join(run_dir, "visualizations"), exist_ok=True)
 print(f"Created/using directory: {run_dir}")
 
-# 2) Attempt to install PyTorch (nightly) for CUDA 12.8
-print("🔸 Attempting to install PyTorch nightly (cu128)...")
+# 2) Set up rotating file logger (instead of basicConfig)
+log_file_path = os.path.join(run_dir, "logs", "environment_setup.log")
+setup_logging(log_file=log_file_path, log_level="INFO")
+
+logging.info("🛠 Environment setup script started.")
+logging.info(f"run_id = {run_id}, run_dir = {run_dir}")
+
+# 3) Attempt to install PyTorch (nightly) for CUDA 12.8
+logging.info("🔸 Attempting to install PyTorch nightly (cu128) ...")
 pytorch_nightly_cmd = [
     sys.executable, "-m", "pip", "install", "--pre",
     "torch", "torchvision", "torchaudio",
@@ -48,49 +63,45 @@ pytorch_nightly_cmd = [
 try:
     run_command(pytorch_nightly_cmd)
 except Exception:
-    print("⚠️ PyTorch CUDA 12.8 (cu128) install failed. Falling back to CPU-only PyTorch...")
+    logging.warning("⚠️ PyTorch CUDA 12.8 (cu128) install failed. Falling back to CPU-only PyTorch...")
     cpu_install_cmd = [sys.executable, "-m", "pip", "install", "torch", "torchvision", "torchaudio"]
     run_command(cpu_install_cmd)
 
-# 3) Basic logging
-logging.basicConfig(level=logging.INFO)
-
-# 4) Check PyTorch + CUDA
 def check_cuda_version():
     import torch
-    print(f"PyTorch version: {torch.__version__}")
+    logging.info(f"PyTorch version: {torch.__version__}")
     if torch.cuda.is_available():
-        print("CUDA is available!")
+        logging.info("CUDA is available!")
         device_count = torch.cuda.device_count()
-        print(f"Number of CUDA devices: {device_count}")
+        logging.info(f"Number of CUDA devices: {device_count}")
         for i in range(device_count):
-            print(f"--- GPU {i} Details ---")
-            print(f"Device Name: {torch.cuda.get_device_name(i)}")
+            logging.info(f"--- GPU {i} Details ---")
+            logging.info(f"Device Name: {torch.cuda.get_device_name(i)}")
             major, minor = torch.cuda.get_device_capability(i)
-            print(f"CUDA Capability (Major, Minor): ({major}, {minor})")
+            logging.info(f"CUDA Capability (Major, Minor): ({major}, {minor})")
             mem = torch.cuda.get_device_properties(i).total_memory / (1024 ** 2)
-            print(f"Total GPU Memory: {mem:.2f} MB")
+            logging.info(f"Total GPU Memory: {mem:.2f} MB")
     else:
-        print("CUDA NOT available. Using CPU-only PyTorch.")
+        logging.warning("CUDA NOT available. Using CPU-only PyTorch.")
 
 try:
     check_cuda_version()
 except ImportError:
-    print("PyTorch not installed or no GPU available.")
+    logging.warning("PyTorch not installed or no GPU available.")
 
-# 5) If `requirements.txt` exists, install packages from it
+# 4) If `requirements.txt` exists, install packages from it
 requirements_file = 'requirements.txt'
 if os.path.exists(requirements_file):
-    print(f"🔸 Installing packages from {requirements_file}...")
+    logging.info(f"🔸 Installing packages from {requirements_file}...")
     try:
         run_command([sys.executable, "-m", "pip", "install", "-r", requirements_file])
-        print(f"✅ Successfully installed packages from {requirements_file}")
+        logging.info(f"✅ Successfully installed packages from {requirements_file}")
     except subprocess.CalledProcessError as e:
-        print(f"❌ Failed to install from {requirements_file}: {e}")
+        logging.error(f"❌ Failed to install from {requirements_file}: {e}")
 else:
-    print("⚠️ No requirements.txt found. Manually install your other dependencies if needed.")
+    logging.warning("⚠️ No requirements.txt found. Manually install your other dependencies if needed.")
 
-print("\n✅ Finished environment setup. Ready for training.")
+logging.info("✅ Finished environment setup. Ready for training.")
 
 # If you need run_id / run_dir in train.py, for example:
 __all__ = ["run_id", "run_dir"]

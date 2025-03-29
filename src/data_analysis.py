@@ -54,5 +54,5 @@ def final_check(csv_path):
 
 
 if __name__ == "__main__":
-    csv_path = r"C:\Users\rafae\PycharmProjects\MisinformationDetectionBert\data\processed\pure_political_dataset_truncated.csv"
+    csv_path = r"C:\Users\Rafael\PycharmProjects\MisinformationDetectionBert\data\processed\pure_political_dataset_truncated.csv"
     final_check(csv_path)

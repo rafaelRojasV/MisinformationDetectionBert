@@ -1,4 +1,3 @@
-# src/pipeline/peft_fusion_transformer.py
 import logging
 import numpy as np
 import pandas as pd
@@ -9,7 +8,10 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import StandardScaler
 
 from transformers import (
-    AutoConfig, AutoTokenizer, Trainer, TrainingArguments, EarlyStoppingCallback
+    AutoConfig,
+    Trainer,
+    TrainingArguments,
+    EarlyStoppingCallback
 )
 from datasets import Dataset as HFDataset
 from evaluate import load as load_metric
@@ -19,6 +21,7 @@ from peft import LoraConfig, get_peft_model, TaskType
 
 # Your custom BERT-with-fusion model
 from src.models.bert_fusion import BertWithNumericFusion
+
 
 class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
     """
@@ -36,10 +39,10 @@ class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
         lora_rank=8,
         lora_alpha=16,
         lora_dropout=0.1,
-        lora_bias="none",                # <-- NEW: whether to train LoRA bias (none, all, lora_only)
-        lora_target_modules=None,        # <-- NEW: list of module names or None to auto-guess
-        use_8bit=False,                  # <-- NEW: if True, load model in 8-bit (bitsandbytes)
-        gradient_checkpointing=False,    # <-- NEW: if True, set training_args.gradient_checkpointing
+        lora_bias="none",                # whether to train LoRA bias (none, all, lora_only)
+        lora_target_modules=None,        # list of module names or None to auto-guess
+        use_8bit=False,                  # if True, load model in 8-bit
+        gradient_checkpointing=False,    # if True, set training_args.gradient_checkpointing
 
         # Standard training hyperparams
         learning_rate=1e-4,
@@ -111,11 +114,13 @@ class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
         self.tokenizer = None
         self.model = None
         self.is_fitted_ = False
-        self._tfidf = None
+
+        # Renamed to public attributes so your code can reference them directly:
+        self.tfidf_vectorizer = None
         self.tfidf_dim_ = 0
         self.meta_dim_ = 0
-        self._tfidf_scaler = None
-        self._meta_scaler = None
+        self.tfidf_scaler = None
+        self.metadata_scaler = None
 
     def _decide_device(self):
         if self.device:
@@ -135,17 +140,17 @@ class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
 
         df = df.copy()
         if fit_mode:
-            self._tfidf = TfidfVectorizer(
+            self.tfidf_vectorizer = TfidfVectorizer(
                 max_features=self.tfidf_max_features,
                 ngram_range=self.tfidf_ngram_range,
                 sublinear_tf=self.tfidf_sublinear_tf,
                 min_df=self.tfidf_min_df
             )
-            X_tfidf = self._tfidf.fit_transform(df["cleaned_statement"])
+            X_tfidf = self.tfidf_vectorizer.fit_transform(df["cleaned_statement"])
         else:
-            if self._tfidf is None:
-                raise ValueError("[_add_tfidf_to_df] TF-IDF was not fitted yet.")
-            X_tfidf = self._tfidf.transform(df["cleaned_statement"])
+            if self.tfidf_vectorizer is None:
+                raise ValueError("[_add_tfidf_to_df] TF-IDF vectorizer was not fitted yet.")
+            X_tfidf = self.tfidf_vectorizer.transform(df["cleaned_statement"])
 
         df["tfidf"] = list(X_tfidf.toarray())
         return df
@@ -167,7 +172,6 @@ class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
         return tfidf_array, meta_array
 
     def _create_dataset(self, texts, tfidf_array, meta_array, labels=None):
-        from datasets import Dataset as HFDataset
         data_dict = {
             "text": texts,
             "tfidf_feats": tfidf_array,
@@ -199,11 +203,10 @@ class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
         return ds
 
     def _collate_fn(self, batch):
-        import torch
-        input_ids      = torch.stack([x["input_ids"] for x in batch])
+        input_ids = torch.stack([x["input_ids"] for x in batch])
         attention_mask = torch.stack([x["attention_mask"] for x in batch])
-        tfidf_feats    = torch.stack([x["tfidf_feats"] for x in batch])
-        meta_feats     = torch.stack([x["meta_feats"] for x in batch])
+        tfidf_feats = torch.stack([x["tfidf_feats"] for x in batch])
+        meta_feats = torch.stack([x["meta_feats"] for x in batch])
 
         out = {
             "input_ids": input_ids,
@@ -232,23 +235,31 @@ class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
         # 2) Dimensions
         if self.use_tfidf and "tfidf" in X_train.columns:
             example_vec = X_train["tfidf"].iloc[0]
-            self.tfidf_dim_ = len(example_vec) if isinstance(example_vec, (list, np.ndarray)) else 0
+            self.tfidf_dim_ = (
+                len(example_vec)
+                if isinstance(example_vec, (list, np.ndarray))
+                else 0
+            )
 
         if "metadata" in X_train.columns:
             example_meta = X_train["metadata"].iloc[0]
-            self.meta_dim_ = len(example_meta) if isinstance(example_meta, (list, np.ndarray)) else 0
+            self.meta_dim_ = (
+                len(example_meta)
+                if isinstance(example_meta, (list, np.ndarray))
+                else 0
+            )
 
         # 3) Convert to NumPy
         tfidf_array, meta_array = self._prepare_numeric_data(X_train)
 
         # 4) Scale if requested
         if self.scale_tfidf and self.tfidf_dim_ > 0:
-            self._tfidf_scaler = StandardScaler()
-            tfidf_array = self._tfidf_scaler.fit_transform(tfidf_array)
+            self.tfidf_scaler = StandardScaler()
+            tfidf_array = self.tfidf_scaler.fit_transform(tfidf_array)
 
         if self.scale_metadata and self.meta_dim_ > 0:
-            self._meta_scaler = StandardScaler()
-            meta_array = self._meta_scaler.fit_transform(meta_array)
+            self.metadata_scaler = StandardScaler()
+            meta_array = self.metadata_scaler.fit_transform(meta_array)
 
         # 5) Build base model
         logging.info(
@@ -265,7 +276,7 @@ class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
                 tfidf_dim=self.tfidf_dim_,
                 meta_dim=self.meta_dim_,
                 class_weights=self.class_weights,
-                load_in_8bit=True,     # QLoRA approach
+                load_in_8bit=True,
                 device_map="auto"
             )
         else:
@@ -278,7 +289,6 @@ class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
             )
 
         # 6) LoRA config
-        from transformers import AutoConfig
         model_config = AutoConfig.from_pretrained(self.model_name)
         model_type = getattr(model_config, "model_type", "").lower()
 
@@ -304,12 +314,20 @@ class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
             target_modules=target_modules
         )
 
-        from peft import get_peft_model
         self.model = get_peft_model(base_model, lora_cfg)
 
-        # 7) Tokenizer
-        from transformers import AutoTokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, use_fast=True)
+        # 7) Tokenizer: Force DebertaV2Tokenizer if "deberta-v" in model_name; else use AutoTokenizer
+        if "deberta-v" in self.model_name.lower():
+            from transformers import DebertaV2Tokenizer
+            logging.info("[fit] Using DebertaV2Tokenizer (slow) for DeBERTa models.")
+            self.tokenizer = DebertaV2Tokenizer.from_pretrained(
+                self.model_name,
+                use_fast=False
+            )
+        else:
+            from transformers import AutoTokenizer
+            logging.info("[fit] Using AutoTokenizer with use_fast=False.")
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, use_fast=False)
 
         # 8) HF train dataset
         text_list = X_train["cleaned_statement"].astype(str).tolist()
@@ -325,10 +343,10 @@ class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
             X_val = self._add_tfidf_to_df(X_val, fit_mode=False)
             tfidf_val, meta_val = self._prepare_numeric_data(X_val)
 
-            if self.scale_tfidf and self._tfidf_scaler and self.tfidf_dim_ > 0:
-                tfidf_val = self._tfidf_scaler.transform(tfidf_val)
-            if self.scale_metadata and self._meta_scaler and self.meta_dim_ > 0:
-                meta_val = self._meta_scaler.transform(meta_val)
+            if self.scale_tfidf and self.tfidf_scaler and self.tfidf_dim_ > 0:
+                tfidf_val = self.tfidf_scaler.transform(tfidf_val)
+            if self.scale_metadata and self.metadata_scaler and self.meta_dim_ > 0:
+                meta_val = self.metadata_scaler.transform(meta_val)
 
             text_val_list = X_val["cleaned_statement"].astype(str).tolist()
             ds_val = self._create_dataset(
@@ -340,11 +358,10 @@ class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
         else:
             ds_val = None
 
-        # 10) TrainingArguments
-        from transformers import TrainingArguments
+        # 10) TrainingArguments (use eval_strategy instead of evaluation_strategy)
         training_args = TrainingArguments(
             output_dir=self.output_dir,
-            evaluation_strategy="epoch" if ds_val else "no",
+            eval_strategy="epoch" if ds_val else "no",
             save_strategy="epoch" if ds_val else "no",
             num_train_epochs=self.num_train_epochs,
             per_device_train_batch_size=self.batch_size,
@@ -363,7 +380,6 @@ class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
             save_total_limit=2
         )
 
-        # If user wants gradient checkpointing
         training_args.gradient_checkpointing = self.gradient_checkpointing
 
         # 11) Metrics
@@ -379,8 +395,6 @@ class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
             f1_ = f1_metric.compute(predictions=preds, references=labels_, average="macro")["f1"]
             return {"accuracy": acc, "f1": f1_}
 
-        # 12) Trainer
-        from transformers import Trainer, EarlyStoppingCallback
         trainer = Trainer(
             model=self.model,
             args=training_args,
@@ -393,7 +407,6 @@ class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
             ] if ds_val else None
         )
 
-        # 13) Move model to device & train
         device = self._decide_device()
         logging.info(f"[fit] Using device={device}")
         self.model.to(device)
@@ -447,10 +460,10 @@ class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
             text_list = batch_df["cleaned_statement"].astype(str).tolist()
             tfidf_array, meta_array = self._prepare_numeric_data(batch_df)
 
-            if self.scale_tfidf and self._tfidf_scaler and self.tfidf_dim_ > 0:
-                tfidf_array = self._tfidf_scaler.transform(tfidf_array)
-            if self.scale_metadata and self._meta_scaler and self.meta_dim_ > 0:
-                meta_array = self._meta_scaler.transform(meta_array)
+            if self.scale_tfidf and self.tfidf_scaler and self.tfidf_dim_ > 0:
+                tfidf_array = self.tfidf_scaler.transform(tfidf_array)
+            if self.scale_metadata and self.metadata_scaler and self.meta_dim_ > 0:
+                meta_array = self.metadata_scaler.transform(meta_array)
 
             tokenized = self.tokenizer(
                 text_list,
@@ -462,7 +475,7 @@ class PEFTBertFusionTransformer(BaseEstimator, TransformerMixin):
             tokenized = {k: v.to(device) for k, v in tokenized.items()}
 
             tfidf_tensor = torch.tensor(tfidf_array, dtype=torch.float32, device=device)
-            meta_tensor  = torch.tensor(meta_array,  dtype=torch.float32, device=device)
+            meta_tensor = torch.tensor(meta_array, dtype=torch.float32, device=device)
 
             with torch.no_grad():
                 outputs = self.model(

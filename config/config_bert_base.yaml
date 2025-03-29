@@ -1,0 +1,64 @@
+system:
+  run_name: "fusion_bert-base-uncased_2cls_tfidf_meta_lora"
+  logging:
+    log_level: "INFO"
+
+model:
+  name: "bert-base-uncased"
+  num_labels: 2
+
+  # LoRA hyperparams
+  lora_rank: 8
+  lora_alpha: 16
+  lora_dropout: 0.05
+  lora_bias: "none"
+
+  # For BERT, common submodules to adapt:
+  # - attention.self: query, key, value
+  # - attention.output: dense
+  # - intermediate: dense
+  # - output: dense
+  # Typically partial matches will apply LoRA to each of these sub-layers.
+  lora_target_modules:
+    - "query"
+    - "key"
+    - "value"
+    - "attention.output.dense"
+    - "intermediate.dense"
+    - "output.dense"
+
+tfidf:
+  use: true
+  max_features: 2000
+  ngram_range: [1, 3]
+  sublinear_tf: true
+  min_df: 3
+  scale: true
+
+metadata:
+  use: false
+  scale: false
+
+training:
+  sample_size: 200
+  use_8bit: false
+  gradient_checkpointing: false
+  use_fp16: true
+  device: "cuda"
+
+  learning_rate: 3e-5
+  batch_size: 16
+  gradient_accumulation_steps: 1
+  num_train_epochs: 4
+  max_length: 256
+
+  label_smoothing_factor: 0.0
+  early_stopping_patience: 2
+  output_dir: "peft_fusion_output"
+  return_logits: false
+  inference_batch_size: 32
+
+evaluation:
+  thresholds_to_try: [0.3, 0.5, 0.7]
+  authenticity_mapping: null
+  n_samples_for_pca: 1000

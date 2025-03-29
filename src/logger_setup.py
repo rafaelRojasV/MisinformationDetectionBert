@@ -1,85 +1,53 @@
-# src/logger_setup.py
-
-import logging
-from concurrent_log_handler import ConcurrentRotatingFileHandler
 import os
-from contextlib import contextmanager
+import logging
+import warnings
+from logging.handlers import RotatingFileHandler
+import transformers
 
-def setup_logging(log_file='logs/pipeline.log', log_level='INFO'):
+def setup_logging(log_file='logs/training.log', log_level='INFO'):
     """
-    Sets up centralized logging with a concurrent rotating file handler and a stream handler.
+    Sets up centralized logging without concurrency locks:
+      - RotatingFileHandler for the file
+      - StreamHandler for console
+      - Captures HF logs, plus Python warnings
     """
+    # Ensure directory exists
     log_dir = os.path.dirname(log_file)
     if log_dir and not os.path.exists(log_dir):
         os.makedirs(log_dir, exist_ok=True)
 
+    # Clear any existing root logger handlers
     logger = logging.getLogger()
+    logger.handlers.clear()
+
+    # Set overall log level
     logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
 
-    # Remove existing handlers to prevent duplication
-    if logger.hasHandlers():
-        logger.handlers.clear()
-
-    # File handler
-    try:
-        file_handler = ConcurrentRotatingFileHandler(
-            log_file, maxBytes=10**7, backupCount=5
-        )
-        file_handler.setLevel(getattr(logging, log_level.upper(), logging.INFO))
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
-    except Exception as e:
-        print(f"⚠️ Failed to set up file handler for logging: {e}")
-
-    # Stream handler (console)
-    stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(getattr(logging, log_level.upper(), logging.INFO))
+    # 1) File Handler (rotating)
+    file_handler = RotatingFileHandler(
+        filename=log_file,
+        maxBytes=10 ** 7,  # 10 MB
+        backupCount=5
+    )
+    file_handler.setLevel(getattr(logging, log_level.upper(), logging.INFO))
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
 
-    logging.info("🔄 Centralized logging is set up successfully.")
+    # 2) Console Handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(getattr(logging, log_level.upper(), logging.INFO))
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
 
-def get_model_logger(model_name, run_dir, log_level='INFO'):
-    """
-    Creates and returns a logger for a specific model.
-    """
-    logger = logging.getLogger(f"model_{model_name}")
-    logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
+    # 3) Capture Python warnings in logging
+    logging.captureWarnings(True)
+    warnings.simplefilter("default")
 
-    if not logger.handlers:
-        log_file = os.path.join(run_dir, 'logs', f"training_{model_name}.log")
-        try:
-            file_handler = ConcurrentRotatingFileHandler(
-                log_file, maxBytes=10**7, backupCount=5
-            )
-            file_handler.setLevel(getattr(logging, log_level.upper(), logging.INFO))
-            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-            file_handler.setFormatter(formatter)
-            logger.addHandler(file_handler)
-        except Exception as e:
-            logging.warning(f"⚠️ Failed to set up file handler for model '{model_name}': {e}")
+    # 4) Let Hugging Face logs propagate into Python logger
+    transformers.utils.logging.enable_propagation()
+    transformers.utils.logging.disable_default_handler()
+    transformers.utils.logging.set_verbosity_info()
 
-    logger.info(f"🔄 Logger for model '{model_name}' is set up.")
+    logger.info("🔄 Centralized logging is set up successfully (no concurrency lock).")
     return logger
-
-@contextmanager
-def logging_redirector(logger):
-    """
-    Redirects logging messages within the context to the specified logger.
-    """
-    original_logger = logging.getLogger()
-    try:
-        # Remove all handlers from the root logger
-        root_handlers = original_logger.handlers[:]
-        for handler in root_handlers:
-            original_logger.removeHandler(handler)
-
-        # Add the model logger's handlers to the root logger
-        for handler in logger.handlers:
-            original_logger.addHandler(handler)
-
-        yield
-    finally:
-        original_logger.handlers = root_handlers

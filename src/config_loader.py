@@ -3,7 +3,7 @@
 import yaml
 import logging
 
-def load_config(config_path='config.yaml'):
+def load_config(config_path='config_bert_base.yaml'):
     """
     Loads configuration from a YAML file.
 
