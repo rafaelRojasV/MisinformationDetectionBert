@@ -40,7 +40,7 @@ metadata:
   scale: false
 
 training:
-  sample_size: 200
+  sample_size: null
   use_8bit: false
   gradient_checkpointing: false
   use_fp16: true

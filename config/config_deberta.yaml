@@ -31,8 +31,8 @@ tfidf:
   scale: true
 
 metadata:
-  use: true
-  scale: true
+  use: false
+  scale: none
 
 training:
   sample_size: null

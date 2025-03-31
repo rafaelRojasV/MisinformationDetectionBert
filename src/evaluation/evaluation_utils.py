@@ -297,16 +297,24 @@ def extended_evaluation(
     Optional extended evaluations:
 
     1) Token-level SHAP demonstration (for a small sample) using 6 fixed example phrases.
+       - We define a custom SHAP predict function that gracefully handles TF–IDF/metadata or not.
+         This way SHAP token-masking won't break the pipeline.
     2) Calibration curve + Brier score (binary only).
     3) Precision@Recall and Recall@Precision at certain operating points.
+    4) Multiple SHAP plots (text-based, bar, waterfall, beeswarm, force),
+       saving each example's waterfall/force in separate files.
 
-    Results are saved as new plots in the 'visualizations' folder.
+    Results are saved in subfolders of 'visualizations':
+      - 'shap_png' for PNG images,
+      - 'shap_html' for HTML files (token-level text, force plots).
     """
     import os
     import logging
     import numpy as np
     import pandas as pd
     import matplotlib.pyplot as plt
+    import torch
+    from scipy.special import softmax
 
     logging.info("===== EXTENDED EVALUATION =====")
 
@@ -320,13 +328,19 @@ def extended_evaluation(
     if "metadata" not in X.columns:
         logging.debug("[ExtendedEval] 'metadata' column not found in X. Only relevant if approach uses metadata.")
 
-    # Create output folder if not exists
+    # Create main visualization folder if not exists
     vis_dir = os.path.join(run_dir, "visualizations")
     os.makedirs(vis_dir, exist_ok=True)
     logging.debug(f"[DEBUG] Visualizations directory: {vis_dir}")
 
+    # Also create subfolders for PNG and HTML
+    shap_png_dir = os.path.join(vis_dir, "shap_png")
+    shap_html_dir = os.path.join(vis_dir, "shap_html")
+    os.makedirs(shap_png_dir, exist_ok=True)
+    os.makedirs(shap_html_dir, exist_ok=True)
+
     # -----------------------------------------------------
-    # 1) Token-Level SHAP on 6 fixed sample phrases
+    # 1) Token-Level SHAP on 6 fixed sample phrases (BATCH)
     # -----------------------------------------------------
     shap_installed = True
     try:
@@ -343,8 +357,8 @@ def extended_evaluation(
     if shap_installed:
         logging.info("[ExtendedEval] Starting SHAP token-level demonstration on fixed sample phrases.")
 
-        # Your 6 sample phrases (3 fake, 3 real)
-        sample_phrases = [
+        # (A) 6 sample phrases (3 fake, 3 real)
+        raw_phrases = [
             "Fake: The senator was convicted yesterday for crimes that never existed in official records.",
             "Fake: The President secretly abolished Congress, no official statements confirm this action.",
             "Fake: Government stats show negative unemployment which is impossible and unverified.",
@@ -353,134 +367,153 @@ def extended_evaluation(
             "Real: Health department statements verify the new vaccine has been successfully distributed."
         ]
 
-        df_shap = pd.DataFrame({
-            "cleaned_statement": sample_phrases,
-            "metadata": [[] for _ in sample_phrases]
-        })
-
-        # ---------------------------
-        # Approach Functions (Debug)
-        # ---------------------------
-        def approach_plain_text(text_list, row_metadata=None):
-            """
-            Logs incoming text, checks if model_pipeline has tfidf_vectorizer,
-            logs shape, calls predict_proba.
-            """
-            logging.debug(f"[ApproachPlainText] Called with {len(text_list)} text items.")
-            if len(text_list) > 0:
-                # Show up to the first 80 chars of the first text for debugging
-                logging.debug(f"[ApproachPlainText] text_list[0][:80] => '{text_list[0][:80]}'")
-
-            tmp_df = pd.DataFrame({'cleaned_statement': text_list})
-
-            # If your pipeline has a TF-IDF vectorizer attribute, let's log it
-            if hasattr(model_pipeline, "tfidf_vectorizer"):
-                features = model_pipeline.tfidf_vectorizer.transform(tmp_df["cleaned_statement"])
-                logging.debug(f"[ApproachPlainText] TF-IDF shape => {features.shape}")
+        # (B) Convert to normal Python str; skip empty
+        sample_phrases = []
+        for i, phrase in enumerate(raw_phrases):
+            py_str = str(phrase).strip()
+            if py_str:
+                sample_phrases.append(py_str)
             else:
-                logging.debug("[ApproachPlainText] No tfidf_vectorizer found; skipping TF-IDF shape check.")
+                logging.warning(f"[SHAP] Skipping empty phrase at index={i}!")
 
-            y_proba = model_pipeline.predict_proba(tmp_df)
-            logging.debug(f"[ApproachPlainText] predict_proba => shape: {y_proba.shape}")
-            if y_proba.shape[0] > 0:
-                logging.debug(f"[ApproachPlainText] predict_proba first row => {y_proba[0]}")
-
-            return y_proba[:, 1]
-
-        def approach_with_metadata(text_list, row_metadata=None):
+        # (C) Generic SHAP predict function that handles text-only or fusion
+        def shap_predict_fusion(text_batch: list) -> np.ndarray:
             """
-            Similar debug approach, also logs if metadata was provided.
+            text_batch may be strings or lists of tokens (SHAP text masker).
+            We'll rejoin tokens if needed, then pass them to the model.
             """
-            logging.debug(f"[ApproachWithMetadata] Called with {len(text_list)} text items.")
-            if len(text_list) > 0:
-                logging.debug(f"[ApproachWithMetadata] text_list[0][:80] => '{text_list[0][:80]}'")
-            logging.debug(f"[ApproachWithMetadata] row_metadata => {row_metadata}")
+            model = model_pipeline.model
+            tokenizer = model_pipeline.tokenizer
+            device = model_pipeline._decide_device()
 
-            tmp_df = pd.DataFrame({'cleaned_statement': text_list})
-            if row_metadata is not None:
-                tmp_df['metadata'] = [row_metadata] * len(tmp_df)
+            tfidf_dim = getattr(model_pipeline, "tfidf_dim_", 0)
+            meta_dim = getattr(model_pipeline, "meta_dim_", 0)
 
-            if hasattr(model_pipeline, "tfidf_vectorizer"):
-                features = model_pipeline.tfidf_vectorizer.transform(tmp_df["cleaned_statement"])
-                logging.debug(f"[ApproachWithMetadata] TF-IDF shape => {features.shape}")
-            else:
-                logging.debug("[ApproachWithMetadata] No tfidf_vectorizer found; skipping TF-IDF shape check.")
+            final_texts = []
+            for item in text_batch:
+                if isinstance(item, list):
+                    final_texts.append(" ".join(item))
+                else:
+                    final_texts.append(str(item))
 
-            y_proba = model_pipeline.predict_proba(tmp_df)
-            logging.debug(f"[ApproachWithMetadata] predict_proba => shape: {y_proba.shape}")
-            if y_proba.shape[0] > 0:
-                logging.debug(f"[ApproachWithMetadata] predict_proba first row => {y_proba[0]}")
+            model.eval()
+            model.to(device)
 
-            return y_proba[:, 1]
+            enc = tokenizer(
+                final_texts,
+                truncation=True,
+                padding=True,
+                max_length=model_pipeline.max_length,
+                return_tensors="pt"
+            ).to(device)
 
-        approaches = {
-            "plain_text": approach_plain_text,
-            "with_metadata": approach_with_metadata,
-        }
+            batch_size = enc["input_ids"].shape[0]
 
-        # Attempt to load a tokenizer for length checks
+            # Prepare zero-tensors if needed
+            tfidf_tensor = None
+            if tfidf_dim > 0:
+                tfidf_tensor = torch.zeros((batch_size, tfidf_dim), dtype=torch.float32, device=device)
+            meta_tensor = None
+            if meta_dim > 0:
+                meta_tensor = torch.zeros((batch_size, meta_dim), dtype=torch.float32, device=device)
+
+            model_kwargs = {
+                "input_ids": enc["input_ids"],
+                "attention_mask": enc["attention_mask"]
+            }
+            if tfidf_tensor is not None:
+                model_kwargs["tfidf_feats"] = tfidf_tensor
+            if meta_tensor is not None:
+                model_kwargs["meta_feats"] = meta_tensor
+
+            with torch.no_grad():
+                outputs = model(**model_kwargs)
+
+            logits = outputs.logits.cpu().numpy()
+            probs = softmax(logits, axis=1)
+            return probs[:, 1]  # Probability of positive (real) class
+
+        # (D) Create SHAP Explainer
+        text_masker = Text()  # simpler than Text("split")
+        explainer = shap.Explainer(
+            shap_predict_fusion,
+            masker=text_masker,
+            algorithm="auto"
+        )
+
+        # (E) Optional length check
         try:
             from transformers import AutoTokenizer
-            tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+            length_tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
         except ImportError:
-            tokenizer = None
-            logging.debug("[ExtendedEval] transformers not installed, can't do any length checks for SHAP.")
+            length_tokenizer = None
 
-        text_masker = Text("split")
+        valid_phrases = []
+        for i, p in enumerate(sample_phrases):
+            if length_tokenizer is not None:
+                enc = length_tokenizer(p)
+                if len(enc["input_ids"]) > 512:
+                    logging.warning(f"[SHAP] Skipping too-long phrase index={i} (>{512} tokens).")
+                    continue
+            valid_phrases.append(p)
 
-        for approach_name, approach_func in approaches.items():
-            logging.info(f"[SHAP] Trying approach: '{approach_name}'")
+        if not valid_phrases:
+            logging.warning("[SHAP] No valid sample phrases => skipping text-level SHAP.")
+        else:
+            try:
+                # shap_values is a shap.Explanation object, shape=(len(valid_phrases),)
+                shap_values = explainer(valid_phrases)
 
-            row_counter = 0
-            for idx, row in df_shap.iterrows():
-                text_to_explain = row["cleaned_statement"]
-                row_metadata = row.get("metadata", None)
+                # 1) Token-level text explanation (HTML-based) for each example
+                for idx, single_explanation in enumerate(shap_values):
+                    text_expl_html = shap.plots.text(single_explanation, display=False)
+                    html_out_path = os.path.join(shap_html_dir, f"shap_text_ex_{model_name}_sample{idx}.html")
+                    with open(html_out_path, "w", encoding="utf-8") as f:
+                        f.write(text_expl_html)
+                    logging.info(f"[SHAP] Saved token-level text explanation to {html_out_path}")
 
-                # Optional skip if text is too long
-                if tokenizer is not None:
-                    encoded = tokenizer(text_to_explain)
-                    if len(encoded["input_ids"]) > 512:
-                        logging.warning(
-                            f"[ExtendedEval] Sample phrase {idx} has {len(encoded['input_ids'])} tokens; skipping SHAP."
-                        )
-                        continue
-
-                # The function that SHAP calls internally
-                def shap_pipeline_predict(perturbed_text_list):
-                    try:
-                        return approach_func(perturbed_text_list, row_metadata)
-                    except Exception as ex:
-                        logging.error(f"[ExtendedEval] Approach '{approach_name}' failed (sample={idx}): {ex}")
-                        # Return zeros so SHAP won't crash
-                        return np.zeros(len(perturbed_text_list))
-
-                explainer = shap.Explainer(
-                    shap_pipeline_predict,
-                    masker=text_masker,
-                    algorithm="auto"
-                )
-
+                # 2) Create a bar chart & beeswarm for the entire shap_values (global summary)
+                bar_png = os.path.join(shap_png_dir, f"shap_bar_{model_name}.png")
                 try:
-                    logging.debug(
-                        f"[SHAP] Explaining sample index={idx}, approach='{approach_name}' => text='{text_to_explain[:80]}...'"
-                    )
-                    shap_values = explainer([text_to_explain])
-                    single_shap_values = shap_values[0]
+                    fig_bar = shap.plots.bar(shap_values, show=False)
+                    plt.savefig(bar_png, dpi=150, bbox_inches="tight")
+                    plt.close()
+                    logging.info(f"[SHAP] Saved bar plot to {bar_png}")
+                except Exception as e:
+                    logging.warning(f"[SHAP] Could not create bar plot: {e}")
 
-                    # Plot and save
-                    fig = shap.plots.text(single_shap_values, display=False)
-                    shap_plot_path = os.path.join(
-                        vis_dir,
-                        f"shap_text_ex_{model_name}_{approach_name}_sample{row_counter}.png"
-                    )
-                    fig.savefig(shap_plot_path, dpi=150)
-                    plt.close(fig)
-                    logging.info(f"[Saved SHAP text explanation: {shap_plot_path}]")
+                beeswarm_png = os.path.join(shap_png_dir, f"shap_beeswarm_{model_name}.png")
+                try:
+                    fig_bee = shap.plots.beeswarm(shap_values, show=False)
+                    plt.savefig(beeswarm_png, dpi=150, bbox_inches="tight")
+                    plt.close()
+                    logging.info(f"[SHAP] Saved beeswarm plot to {beeswarm_png}")
+                except Exception as e:
+                    logging.warning(f"[SHAP] Could not create beeswarm plot: {e}")
 
-                except Exception as ex:
-                    logging.warning(f"[ExtendedEval] SHAP explanation failed (sample={idx}, approach='{approach_name}'): {ex}")
+                # 3) Waterfall & Force Plots for **each** example
+                for idx, single_explanation in enumerate(shap_values):
+                    # Waterfall: returns a Matplotlib figure
+                    try:
+                        waterfall_out = os.path.join(shap_png_dir, f"shap_waterfall_{model_name}_sample{idx}.png")
+                        fig_wf = shap.plots.waterfall(single_explanation, show=False)
+                        plt.savefig(waterfall_out, dpi=150, bbox_inches="tight")
+                        plt.close()
+                        logging.info(f"[SHAP] Saved waterfall plot for sample {idx}: {waterfall_out}")
+                    except Exception as e:
+                        logging.warning(f"[SHAP] Could not create waterfall plot for sample {idx}: {e}")
 
-                row_counter += 1
+                    # Force: returns a Visualizer => shap.save_html is valid
+                    try:
+                        force_out = os.path.join(shap_html_dir, f"shap_force_{model_name}_sample{idx}.html")
+                        force_fig = shap.plots.force(single_explanation, matplotlib=False)
+                        shap.save_html(force_out, force_fig)
+                        logging.info(f"[SHAP] Saved force plot (HTML) for sample {idx}: {force_out}")
+                    except Exception as e:
+                        logging.warning(f"[SHAP] Could not create force plot for sample {idx}: {e}")
+
+            except Exception as e:
+                logging.warning(f"[ExtendedEval] SHAP explanation failed: {e}")
 
     else:
         logging.info("[ExtendedEval] SHAP not installed => skipping token-level SHAP demonstration.")
@@ -511,7 +544,7 @@ def extended_evaluation(
                 ax_cal.set_title("Calibration Curve (Binary)")
                 ax_cal.legend(loc="best")
 
-                cal_plot_path = os.path.join(vis_dir, f"calibration_{model_name}.png")
+                cal_plot_path = os.path.join(shap_png_dir, f"calibration_{model_name}.png")
                 fig_cal.savefig(cal_plot_path, dpi=150)
                 plt.close(fig_cal)
                 logging.info(f"[Saved calibration curve to {cal_plot_path}]")
@@ -521,7 +554,7 @@ def extended_evaluation(
         logging.warning(f"[ExtendedEval] Could not compute calibration curve/Brier: {e}")
 
     # ------------------------------------------------------
-    # 3) Precision@Recall and Recall@Precision at certain points
+    # 3) Precision@Recall and Recall@Precision
     # ------------------------------------------------------
     try:
         if X.shape[0] == 0:
@@ -535,6 +568,7 @@ def extended_evaluation(
                 precision_targets = [0.80, 0.90]
 
                 proba_pos = y_proba[:, 1]
+                # Sort descending
                 sorted_probs = np.sort(proba_pos)[::-1]
 
                 # For each recall target
@@ -578,6 +612,3 @@ def extended_evaluation(
         logging.warning(f"[ExtendedEval] Could not compute precision/recall at operating points: {e}")
 
     logging.info("===== EXTENDED EVALUATION DONE =====")
-
-
-

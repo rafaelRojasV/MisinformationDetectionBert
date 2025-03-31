@@ -2,30 +2,30 @@
 """
 scripts/environment_setup.py
 
- - Generates a run_id and creates output directories.
- - Attempts to install PyTorch nightly with CUDA 12.8 (cu128).
+ - Installs or upgrades PyTorch (nightly CUDA 12.8 if possible).
  - Falls back to CPU-only PyTorch if that fails.
  - Installs packages from `requirements.txt`.
- - Prints GPU info if available.
+ - Checks and logs GPU info if available.
+ - No run_id or run_dir generation here, purely environment setup.
 
-Use: `python scripts/environment_setup.py`
+Usage:
+    python environment_setup.py
 """
 
 import os
 import sys
 import subprocess
 import logging
-import importlib
-import uuid
-from datetime import datetime
-import sys
+
+# Ensure stdout/stderr encode UTF-8
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
-# -------------------------------
+
+# --------------
 # Import your rotating logger setup
-# -------------------------------
-# In environment_setup.py:
+# --------------
 from src.logger_setup import setup_logging
+
 
 def run_command(cmd_list):
     """Run a command list via subprocess.check_call, logs on fail."""
@@ -35,39 +35,32 @@ def run_command(cmd_list):
         print(f"❌ Command failed: {' '.join(cmd_list)}\n   Error: {e}")
         raise e
 
-# 1) Generate run ID & directories
-run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
-print(f"🔸 Generated run_id => {run_id}")
 
-run_dir = os.path.join("model_artifacts", f"run_{run_id}")
-os.makedirs(run_dir, exist_ok=True)
-os.makedirs(os.path.join(run_dir, "logs"), exist_ok=True)
-os.makedirs(os.path.join(run_dir, "visualizations"), exist_ok=True)
-print(f"Created/using directory: {run_dir}")
+def setup_pytorch_cuda128():
+    """Try installing PyTorch nightly (cu128). If it fails, fallback to CPU-only."""
+    import logging
+    import sys
+    logging.info("🔸 Attempting to install PyTorch nightly (cu128) ...")
 
-# 2) Set up rotating file logger (instead of basicConfig)
-log_file_path = os.path.join(run_dir, "logs", "environment_setup.log")
-setup_logging(log_file=log_file_path, log_level="INFO")
+    # We'll suppress pip install output with "-qq"
+    pytorch_nightly_cmd = [
+        sys.executable, "-m", "pip", "install", "--pre", "-qq",
+        "torch", "torchvision", "torchaudio",
+        "--index-url", "https://download.pytorch.org/whl/nightly/cu128"
+    ]
+    try:
+        run_command(pytorch_nightly_cmd)
+    except Exception:
+        logging.warning("⚠️ PyTorch CUDA 12.8 (cu128) install failed. Falling back to CPU-only PyTorch...")
+        cpu_install_cmd = [
+            sys.executable, "-m", "pip", "install", "-qq",
+            "torch", "torchvision", "torchaudio"
+        ]
+        run_command(cpu_install_cmd)
 
-logging.info("🛠 Environment setup script started.")
-logging.info(f"run_id = {run_id}, run_dir = {run_dir}")
-
-# 3) Attempt to install PyTorch (nightly) for CUDA 12.8
-logging.info("🔸 Attempting to install PyTorch nightly (cu128) ...")
-pytorch_nightly_cmd = [
-    sys.executable, "-m", "pip", "install", "--pre",
-    "torch", "torchvision", "torchaudio",
-    "--index-url", "https://download.pytorch.org/whl/nightly/cu128"
-]
-
-try:
-    run_command(pytorch_nightly_cmd)
-except Exception:
-    logging.warning("⚠️ PyTorch CUDA 12.8 (cu128) install failed. Falling back to CPU-only PyTorch...")
-    cpu_install_cmd = [sys.executable, "-m", "pip", "install", "torch", "torchvision", "torchaudio"]
-    run_command(cpu_install_cmd)
 
 def check_cuda_version():
+    """Log some CUDA/GPU info if available."""
     import torch
     logging.info(f"PyTorch version: {torch.__version__}")
     if torch.cuda.is_available():
@@ -84,24 +77,48 @@ def check_cuda_version():
     else:
         logging.warning("CUDA NOT available. Using CPU-only PyTorch.")
 
-try:
-    check_cuda_version()
-except ImportError:
-    logging.warning("PyTorch not installed or no GPU available.")
 
-# 4) If `requirements.txt` exists, install packages from it
-requirements_file = 'requirements.txt'
-if os.path.exists(requirements_file):
-    logging.info(f"🔸 Installing packages from {requirements_file}...")
+def install_requirements_if_exists():
+    """Install packages from `requirements.txt` if found."""
+    requirements_file = 'requirements.txt'
+    if os.path.exists(requirements_file):
+        logging.info(f"🔸 Installing packages from {requirements_file} (quietly)...")
+        try:
+            run_command([sys.executable, "-m", "pip", "install", "-qq", "-r", requirements_file])
+            logging.info(f"✅ Successfully installed packages from {requirements_file} (quiet mode).")
+        except subprocess.CalledProcessError as e:
+            logging.error(f"❌ Failed to install from {requirements_file}: {e}")
+    else:
+        logging.warning("⚠️ No requirements.txt found. Manually install dependencies if needed.")
+
+
+def main():
+    # ------------------------------------------------------------------
+    # 1) Initialize logging to console or a simple file if you prefer
+    # ------------------------------------------------------------------
+    # (We can log to console with basic settings or use rotating logs.)
+    setup_logging(log_file=None, log_level="INFO")  # logs to console only
+    logging.info("🛠 Environment setup script started (no run directories).")
+
+    # ------------------------------------------------------------------
+    # 2) Install PyTorch nightly with CUDA 12.8 if possible
+    # ------------------------------------------------------------------
+    setup_pytorch_cuda128()
+
+    # ------------------------------------------------------------------
+    # 3) Check CUDA version
+    # ------------------------------------------------------------------
     try:
-        run_command([sys.executable, "-m", "pip", "install", "-r", requirements_file])
-        logging.info(f"✅ Successfully installed packages from {requirements_file}")
-    except subprocess.CalledProcessError as e:
-        logging.error(f"❌ Failed to install from {requirements_file}: {e}")
-else:
-    logging.warning("⚠️ No requirements.txt found. Manually install your other dependencies if needed.")
+        check_cuda_version()
+    except ImportError:
+        logging.warning("PyTorch not installed or no GPU available.")
 
-logging.info("✅ Finished environment setup. Ready for training.")
+    # ------------------------------------------------------------------
+    # 4) Install from requirements.txt if present
+    # ------------------------------------------------------------------
+    install_requirements_if_exists()
 
-# If you need run_id / run_dir in train.py, for example:
-__all__ = ["run_id", "run_dir"]
+    logging.info("✅ Environment setup complete. You can now run train_selective_suppression.py.")
+
+if __name__ == "__main__":
+    main()
